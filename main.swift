@@ -33,8 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     """
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        statusItem.button?.image = NSImage(systemSymbolName: "moon.zzz", accessibilityDescription: "Sleep Timer")
-        statusItem.button?.imagePosition = .imageLeading
+        updateStatusItem()
         let menu = NSMenu()
         menu.delegate = self            // populated lazily in menuNeedsUpdate
         statusItem.menu = menu
@@ -105,24 +104,58 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         RunLoop.main.add(fire, forMode: .common)
         endTimer = fire
 
-        let tick = Timer(timeInterval: 60, repeats: true) { [weak self] _ in self?.updateTitle() }
+        let tick = Timer(timeInterval: 60, repeats: true) { [weak self] _ in self?.updateStatusItem() }
         tick.tolerance = 10              // lets macOS batch wakeups
         RunLoop.main.add(tick, forMode: .common)
         titleTimer = tick
 
-        updateTitle()
+        updateStatusItem()
     }
 
-    private func updateTitle() {
-        guard let end = endDate else { statusItem.button?.title = ""; return }
+    // MARK: Menu-bar item
+
+    /// Idle: a template moon that follows the menu-bar colour. Running: a blue countdown pill.
+    private func updateStatusItem() {
+        guard let end = endDate else {
+            statusItem.button?.image = NSImage(systemSymbolName: "moon.zzz", accessibilityDescription: "Sleep Timer")
+            return
+        }
         let mins = max(1, Int((end.timeIntervalSinceNow / 60).rounded(.up)))
-        statusItem.button?.title = " \(mins)m"
+        statusItem.button?.image = Self.pillImage(minutes: mins)
+    }
+
+    private static func pillImage(minutes: Int) -> NSImage {
+        let text = "\(minutes)m" as NSString
+        let attributes: [NSAttributedString.Key: Any] = [
+            .font: NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .semibold),
+            .foregroundColor: NSColor.white,
+        ]
+        let config = NSImage.SymbolConfiguration(pointSize: 12, weight: .semibold)
+            .applying(.init(paletteColors: [.white]))
+        let moon = NSImage(systemSymbolName: "moon.zzz", accessibilityDescription: nil)?
+            .withSymbolConfiguration(config)
+        let moonSize = moon?.size ?? .zero
+        let textSize = text.size(withAttributes: attributes)
+        let padding: CGFloat = 7, gap: CGFloat = 4, height: CGFloat = 20
+        let width = ceil(padding * 2 + moonSize.width + gap + textSize.width)
+
+        let image = NSImage(size: NSSize(width: width, height: height), flipped: false) { rect in
+            NSColor(srgbRed: 0x25 / 255, green: 0x63 / 255, blue: 0xEB / 255, alpha: 1).setFill()
+            NSBezierPath(roundedRect: rect, xRadius: height / 2, yRadius: height / 2).fill()
+            moon?.draw(in: NSRect(origin: NSPoint(x: padding, y: (height - moonSize.height) / 2), size: moonSize))
+            text.draw(at: NSPoint(x: padding + moonSize.width + gap, y: (height - textSize.height) / 2),
+                      withAttributes: attributes)
+            return true
+        }
+        image.isTemplate = false         // keep our colours; templates are drawn monochrome
+        image.accessibilityDescription = "Sleep Timer, \(minutes) minutes left"
+        return image
     }
 
     private func stop() {
         invalidateTimers()
         endDate = nil
-        statusItem.button?.title = ""
+        updateStatusItem()
     }
 
     private func invalidateTimers() {

@@ -5,7 +5,7 @@ A tiny macOS menu-bar app that **pauses whatever is playing** after a set time, 
 ## Features
 
 - Presets: 15, 30, 45 min, 1, 1.5, 2 hours
-- Countdown in the menu bar (e.g. `42m`), plus **Add 15 Minutes** and **Cancel Timer**
+- Countdown in a blue menu-bar pill while a timer runs (e.g. `42m`), plus **Add 15 Minutes** and **Cancel Timer**
 - **Pause Now** to pause immediately
 - **Launch at Login** toggle
 - Menu bar only, no Dock icon. Does no work while idle.
