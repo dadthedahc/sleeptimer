@@ -1,0 +1,61 @@
+#!/bin/zsh
+# sleeptimer — pause whatever is playing after N minutes (MediaRemote Pause command).
+# Usage:
+#   sleeptimer 45       pause in 45 minutes (replaces any running timer)
+#   sleeptimer status   show time remaining
+#   sleeptimer cancel   cancel the running timer
+#   sleeptimer test     pause in 5 seconds (for checking permissions)
+set -eu
+
+STATE="${TMPDIR:-/tmp}/sleeptimer.state"   # contents: "<pid> <end-epoch>"
+
+pause_media() {
+  # Sends an explicit Pause (not a toggle) to the system Now Playing controller.
+  # Uses the private MediaRemote framework, so a macOS update could break it.
+  osascript -l JavaScript <<'EOF' >/dev/null
+ObjC.import('Foundation');
+$.NSBundle.bundleWithPath('/System/Library/PrivateFrameworks/MediaRemote.framework/').load;
+const c = $.NSClassFromString('MRNowPlayingController').localRouteController;
+c.sendCommandOptionsCompletion(1, $.NSDictionary.alloc.init, null);  // 1 = pause
+delay(1);
+EOF
+}
+
+running() {
+  [[ -f $STATE ]] && kill -0 "${$(<"$STATE")%% *}" 2>/dev/null
+}
+
+cancel() {
+  if running; then
+    local pid=${$(<"$STATE")%% *}
+    pkill -P "$pid" 2>/dev/null || true   # the inner sleep
+    kill "$pid" 2>/dev/null || true
+    rm -f "$STATE"
+    echo "Timer cancelled."
+  else
+    rm -f "$STATE"
+    echo "No timer running."
+  fi
+}
+
+start() {
+  local secs=$1
+  running && cancel >/dev/null
+  ( sleep "$secs"; pause_media; rm -f "$STATE" ) &!
+  echo "$! $(( $(date +%s) + secs ))" > "$STATE"
+  echo "Pausing at $(date -r $(( $(date +%s) + secs )) '+%-I:%M %p')."
+}
+
+case "${1:-}" in
+  <->)    (( $1 > 0 )) || { echo "Minutes must be > 0." >&2; exit 1; }
+          start $(( $1 * 60 )) ;;
+  test)   start 5 ;;
+  cancel) cancel ;;
+  status) if running; then
+            left=$(( ${$(<"$STATE")##* } - $(date +%s) ))
+            echo "$(( left / 60 ))m $(( left % 60 ))s remaining."
+          else
+            echo "No timer running."
+          fi ;;
+  *)      sed -n '2,7p' "$0" | sed 's/^# \{0,1\}//'; exit 1 ;;
+esac
