@@ -5,11 +5,14 @@
 // Resource model: no timers, polling or background work while idle. The menu is built
 // only when opened. While a timer runs: one one-shot timer for the pause, plus one
 // coalescable once-a-minute timer for the menu-bar countdown.
-// Security model: no network, no file I/O, no user input reaches a shell, no special
-// permissions. The only child process is /usr/bin/osascript with a fixed script.
+// Security model: no network, no user input reaches a shell, no special permissions.
+// The only file written is ~/Library/Logs/SleepTimer.log (pause failures only). The only
+// child process is /usr/bin/osascript with a fixed script.
+// If the pause fails, it logs why, flags it in the menu and posts a notification.
 
 import Cocoa
 import ServiceManagement
+import UserNotifications
 
 final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private let statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -17,6 +20,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var endDate: Date?
     private var endTimer: Timer?
     private var titleTimer: Timer?
+    private var lastPauseFailure: Date?
+    private static let logURL = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Logs/SleepTimer.log")
+    private var askedForNotifications = false
 
     private static let timeFormatter: DateFormatter = {
         let f = DateFormatter()
@@ -43,6 +50,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
+        if let failed = lastPauseFailure {
+            add(menu, "⚠️ Pause failed at \(Self.timeFormatter.string(from: failed))", #selector(openLog))
+            menu.addItem(.separator())
+        }
         if let end = endDate {
             menu.addItem(withTitle: "Pausing at \(Self.timeFormatter.string(from: end))", action: nil, keyEquivalent: "")
             add(menu, "Add 15 Minutes", #selector(addFifteen))
@@ -88,11 +99,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     @objc private func cancelTimer() { stop() }
 
     @objc private func pauseNow() {
+        askForNotificationsOnce()
         stop()
         pauseMedia()
     }
 
     private func schedule(end: Date) {
+        askForNotificationsOnce()
         invalidateTimers()
         endDate = end
 
@@ -187,13 +200,80 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: Pause
 
+    /// If osascript errors or hangs: log why, flag it in the menu (click opens the log), notify.
+    /// Limit: a MediaRemote call that exits cleanly but pauses nothing can't be detected.
     private func pauseMedia() {
+        runOsascript(["-l", "JavaScript", "-e", Self.pauseScript]) { [weak self] ok, _, err in
+            guard let self else { return }
+            if ok { self.lastPauseFailure = nil; return }
+            self.logFailure("Pause failed: \(err.isEmpty ? "no error output" : err)")
+            self.lastPauseFailure = Date()
+            self.notifyPauseFailed(detail: err)
+        }
+    }
+
+    /// Appends one line with the macOS version, so failures after an OS update are easy to trace.
+    private func logFailure(_ message: String) {
+        NSLog("SleepTimer: %@", message)
+        let os = ProcessInfo.processInfo.operatingSystemVersionString
+        let line = "\(ISO8601DateFormatter().string(from: Date())) [macOS \(os)] \(message)\n"
+        let data = Data(line.utf8)
+        if let h = try? FileHandle(forWritingTo: Self.logURL) {
+            defer { try? h.close() }
+            _ = try? h.seekToEnd()
+            try? h.write(contentsOf: data)
+        } else {
+            try? data.write(to: Self.logURL)
+        }
+    }
+
+    @objc private func openLog() { NSWorkspace.shared.open(Self.logURL) }   // opens in Console
+
+    /// Runs osascript; calls back on the main thread with (exited 0, stdout, stderr).
+    /// Killed after 10 s so a hang counts as a failure.
+    private func runOsascript(_ args: [String], completion: @escaping (Bool, String, String) -> Void) {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")   // absolute path: no PATH lookup
-        p.arguments = ["-l", "JavaScript", "-e", Self.pauseScript]     // fixed script, no interpolation
-        p.standardOutput = FileHandle.nullDevice
-        p.standardError = FileHandle.nullDevice
-        try? p.run()
+        p.arguments = args                                             // fixed script, no interpolation
+        let out = Pipe(), err = Pipe()
+        p.standardOutput = out
+        p.standardError = err
+        p.terminationHandler = { p in
+            let read = { (pipe: Pipe) in
+                String(decoding: pipe.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
+            }
+            let ok = p.terminationReason == .exit && p.terminationStatus == 0
+            var (o, e) = (read(out), read(err))
+            if p.terminationReason == .uncaughtSignal && e.isEmpty { e = "osascript timed out after 10 s" }
+            DispatchQueue.main.async { completion(ok, o, e) }
+        }
+        do {
+            try p.run()
+        } catch {
+            completion(false, "", error.localizedDescription)
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 10) { if p.isRunning { p.terminate() } }
+    }
+
+    // MARK: Notifications
+
+    /// Asked when the user starts a timer (awake), not at 2 AM when a pause fails.
+    private func askForNotificationsOnce() {
+        guard !askedForNotifications else { return }
+        askedForNotifications = true
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert]) { _, _ in }
+    }
+
+    private func notifyPauseFailed(detail: String) {
+        let content = UNMutableNotificationContent()
+        content.title = "Sleep Timer couldn't pause"
+        content.body = detail.isEmpty
+            ? "Nothing responded to the pause. Try Pause Now to check."
+            : String(detail.prefix(200))
+        let request = UNNotificationRequest(identifier: "pause-failed", content: content, trigger: nil)
+        UNUserNotificationCenter.current().add(request)
     }
 }
 
