@@ -8,8 +8,8 @@
 // Security model: no network, no user input reaches a shell, no special permissions.
 // The only file written is ~/Library/Logs/SleepTimer.log (pause failures only). The only
 // child process is /usr/bin/osascript with fixed scripts.
-// If the MediaRemote pause fails, it logs it, falls back to pausing TV/Music and quitting
-// Infuse, and posts a notification if nothing could be paused.
+// If the MediaRemote pause fails, it logs it, falls back to pausing TV/Music, and posts
+// a notification if nothing could be paused.
 
 import Cocoa
 import ServiceManagement
@@ -217,7 +217,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: Pause
 
-    /// MediaRemote first. If osascript errors or hangs, pause TV/Music directly and quit Infuse.
+    /// MediaRemote first. If osascript errors or hangs, pause TV/Music directly.
     /// If that also finds nothing to stop, notify and flag it in the menu.
     /// Limit: a MediaRemote call that exits cleanly but pauses nothing can't be detected.
     private func pauseMedia() {
@@ -226,12 +226,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             if ok { self.lastPauseFailure = nil; return }
             // Logged even if the fallback works: this is the signal that a macOS update broke MediaRemote.
             self.logFailure("MediaRemote pause failed: \(err.isEmpty ? "no error output" : err)")
-            let quitInfuse = self.quitInfuse()
             self.runOsascript(["-e", Self.fallbackScript]) { ok, out, err2 in
                 let paused = ok ? (Int(out) ?? 0) : 0
                 if !ok { self.logFailure("Fallback pause failed: \(err2.isEmpty ? "no error output" : err2)") }
-                let worked = paused > 0 || quitInfuse
-                self.logFailure(worked ? "Fallback stopped playback (TV/Music paused: \(paused), Infuse quit: \(quitInfuse))"
+                let worked = paused > 0
+                self.logFailure(worked ? "Fallback paused \(paused) app(s) (TV/Music)"
                                        : "Nothing was paused")
                 self.lastPauseFailure = (Date(), worked)
                 if !worked { self.notifyPauseFailed(detail: err.isEmpty ? err2 : err) }
@@ -281,12 +280,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             return
         }
         DispatchQueue.main.asyncAfter(deadline: .now() + 10) { if p.isRunning { p.terminate() } }
-    }
-
-    /// Infuse has no pause command; quitting stops playback and it resumes from the same spot.
-    private func quitInfuse() -> Bool {
-        let apps = NSWorkspace.shared.runningApplications.filter { $0.localizedName == "Infuse" }
-        return apps.reduce(false) { $1.terminate() || $0 }
     }
 
     // MARK: Notifications
