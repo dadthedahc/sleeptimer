@@ -51,6 +51,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
             for m in presets {
                 add(menu, label(minutes: m), #selector(startPreset(_:))).tag = m
             }
+            menu.addItem(.separator())
+            add(menu, "Test Pause in 5 Seconds", #selector(testPause))
         }
         menu.addItem(.separator())
         add(menu, "Pause Now", #selector(pauseNow))
@@ -86,6 +88,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     }
 
     @objc private func cancelTimer() { stop() }
+
+    /// Quick check after macOS updates: runs the real timer path with a 5-second delay.
+    @objc private func testPause() {
+        schedule(end: Date().addingTimeInterval(5))
+    }
 
     @objc private func pauseNow() {
         stop()

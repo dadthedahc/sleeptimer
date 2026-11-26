@@ -7,6 +7,7 @@ A tiny macOS menu-bar app that **pauses whatever is playing** after a set time, 
 - Presets: 15, 30, 45 min, 1, 1.5, 2 hours
 - Countdown in a blue menu-bar pill while a timer runs (e.g. `42m`), plus **Add 15 Minutes** and **Cancel Timer**
 - **Pause Now** to pause immediately
+- **Test Pause in 5 Seconds** (idle only) to check the pause still works after a macOS update
 - **Launch at Login** toggle
 - Menu bar only, no Dock icon. Does no work while idle.
 
@@ -27,7 +28,7 @@ Install to `/Applications` before turning on Launch at Login, since the login it
 
 macOS 15.4+ blocks third-party apps from sending commands to the system Now Playing service (`mediaremoted`) directly. The app launches `/usr/bin/osascript` with a fixed JXA script that sends an explicit **Pause** (not a toggle) through the private `MediaRemote` framework's `MRNowPlayingController`. That works from the system binary without special permissions.
 
-Because this uses a private framework, a macOS update could break it. Use **Pause Now** to check after updates. A fallback is to target apps directly (`tell application "TV" to pause`, `quit app "Infuse"`).
+Because this uses a private framework, a macOS update could break it. Use **Test Pause in 5 Seconds** (start something playing, then pick it) to check after updates. A fallback is to target apps directly (`tell application "TV" to pause`, `quit app "Infuse"`).
 
 Tested on macOS 27 with Infuse.
 
