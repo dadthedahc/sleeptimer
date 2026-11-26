@@ -47,5 +47,5 @@ Tested on macOS 27 with Infuse.
 
 - `main.swift`: the app
 - `build.sh`: builds and signs `SleepTimer.app`
-- `AppIcon.icns`, `icon.png`: app icon and its 1024px source (generated with Recraft)
+- `AppIcon.icns`, `icon.png`: app icon and its 1024px full-bleed source (generated with Recraft; macOS applies the rounded mask)
 - `sleeptimer`: original command-line prototype (`./sleeptimer 45`, `status`, `cancel`, `test`)
