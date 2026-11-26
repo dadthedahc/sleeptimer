@@ -1,3 +1,5 @@
+<p align="center"><img src="banner.png" alt="SleepTimer: pauses whatever you're watching when you fall asleep" width="100%"></p>
+
 # Sleep Timer
 
 A tiny macOS menu-bar app that **pauses whatever is playing** after a set time, without putting the Mac to sleep. Built for falling asleep to TV (Infuse, the TV app, streaming in a browser).
