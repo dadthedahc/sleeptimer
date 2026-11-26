@@ -25,6 +25,7 @@ cat > "$APP/Contents/Info.plist" <<'EOF'
   <key>CFBundleShortVersionString</key><string>0.1</string>
   <key>LSMinimumSystemVersion</key><string>13.0</string>
   <key>LSUIElement</key><true/>
+  <key>NSAppleEventsUsageDescription</key><string>If the normal pause fails, Sleep Timer pauses TV and Music directly.</string>
 </dict>
 </plist>
 EOF
