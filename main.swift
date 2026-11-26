@@ -5,10 +5,11 @@
 // Resource model: no timers, polling or background work while idle. The menu is built
 // only when opened. While a timer runs: one one-shot timer for the pause, plus one
 // coalescable once-a-minute timer for the menu-bar countdown.
-// Security model: no network, no file I/O, no user input reaches a shell, no special
-// permissions. The only child process is /usr/bin/osascript with fixed scripts.
-// If the MediaRemote pause fails, it falls back to pausing TV/Music and quitting Infuse,
-// and posts a notification if nothing could be paused.
+// Security model: no network, no user input reaches a shell, no special permissions.
+// The only file written is ~/Library/Logs/SleepTimer.log (pause failures only). The only
+// child process is /usr/bin/osascript with fixed scripts.
+// If the MediaRemote pause fails, it logs it, falls back to pausing TV/Music and quitting
+// Infuse, and posts a notification if nothing could be paused.
 
 import Cocoa
 import ServiceManagement
@@ -20,7 +21,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var endDate: Date?
     private var endTimer: Timer?
     private var titleTimer: Timer?
-    private var lastPauseFailure: Date?
+    private var lastPauseFailure: (date: Date, fallbackWorked: Bool)?
+    private static let logURL = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Logs/SleepTimer.log")
     private var askedForNotifications = false
 
     private static let timeFormatter: DateFormatter = {
@@ -63,7 +66,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
         if let failed = lastPauseFailure {
-            menu.addItem(withTitle: "⚠️ Pause failed at \(Self.timeFormatter.string(from: failed))", action: nil, keyEquivalent: "")
+            let time = Self.timeFormatter.string(from: failed.date)
+            add(menu, failed.fallbackWorked ? "⚠️ Normal pause failed at \(time) (fallback used)"
+                                            : "⚠️ Pause failed at \(time)", #selector(openLog))
             menu.addItem(.separator())
         }
         if let end = endDate {
@@ -219,20 +224,37 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
         runOsascript(["-l", "JavaScript", "-e", Self.pauseScript]) { [weak self] ok, _, err in
             guard let self else { return }
             if ok { self.lastPauseFailure = nil; return }
-            NSLog("SleepTimer: MediaRemote pause failed: %@", err)
+            // Logged even if the fallback works: this is the signal that a macOS update broke MediaRemote.
+            self.logFailure("MediaRemote pause failed: \(err.isEmpty ? "no error output" : err)")
             let quitInfuse = self.quitInfuse()
             self.runOsascript(["-e", Self.fallbackScript]) { ok, out, err2 in
                 let paused = ok ? (Int(out) ?? 0) : 0
-                if !ok { NSLog("SleepTimer: fallback pause failed: %@", err2) }
-                if paused > 0 || quitInfuse {
-                    self.lastPauseFailure = nil
-                } else {
-                    self.lastPauseFailure = Date()
-                    self.notifyPauseFailed(detail: err.isEmpty ? err2 : err)
-                }
+                if !ok { self.logFailure("Fallback pause failed: \(err2.isEmpty ? "no error output" : err2)") }
+                let worked = paused > 0 || quitInfuse
+                self.logFailure(worked ? "Fallback stopped playback (TV/Music paused: \(paused), Infuse quit: \(quitInfuse))"
+                                       : "Nothing was paused")
+                self.lastPauseFailure = (Date(), worked)
+                if !worked { self.notifyPauseFailed(detail: err.isEmpty ? err2 : err) }
             }
         }
     }
+
+    /// Appends one line with the macOS version, so failures after an OS update are easy to trace.
+    private func logFailure(_ message: String) {
+        NSLog("SleepTimer: %@", message)
+        let os = ProcessInfo.processInfo.operatingSystemVersionString
+        let line = "\(ISO8601DateFormatter().string(from: Date())) [macOS \(os)] \(message)\n"
+        let data = Data(line.utf8)
+        if let h = try? FileHandle(forWritingTo: Self.logURL) {
+            defer { try? h.close() }
+            _ = try? h.seekToEnd()
+            try? h.write(contentsOf: data)
+        } else {
+            try? data.write(to: Self.logURL)
+        }
+    }
+
+    @objc private func openLog() { NSWorkspace.shared.open(Self.logURL) }   // opens in Console
 
     /// Runs osascript with a fixed script; calls back on the main thread with (exited 0, stdout, stderr).
     /// Killed after 10 s so a hang counts as a failure.

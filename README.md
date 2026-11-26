@@ -27,7 +27,9 @@ Install to `/Applications` before turning on Launch at Login, since the login it
 
 macOS 15.4+ blocks third-party apps from sending commands to the system Now Playing service (`mediaremoted`) directly. The app launches `/usr/bin/osascript` with a fixed JXA script that sends an explicit **Pause** (not a toggle) through the private `MediaRemote` framework's `MRNowPlayingController`. That works from the system binary without special permissions.
 
-Because this uses a private framework, a macOS update could break it. If `osascript` exits with an error or hangs for 10 seconds, the app falls back to pausing TV and Music directly (only if they're running; macOS asks once for Automation permission) and quitting Infuse, which resumes where it left off. If none of that stops anything, it posts a notification and shows "Pause failed at …" at the top of the menu. Details go to the system log (`log show --predicate 'process == "SleepTimer"' --last 12h`).
+Because this uses a private framework, a macOS update could break it. If `osascript` exits with an error or hangs for 10 seconds, the app falls back to pausing TV and Music directly (only if they're running; macOS asks once for Automation permission) and quitting Infuse, which resumes where it left off. If none of that stops anything, it also posts a notification.
+
+Every failure is recorded in `~/Library/Logs/SleepTimer.log` with the time, macOS version and the error, even when the fallback worked, so a break after an OS update can be traced later. The top of the menu shows "Normal pause failed at … (fallback used)" or "Pause failed at …"; click it to open the log in Console.
 
 One gap remains: if MediaRemote exits cleanly but pauses nothing, the app can't tell. Use **Pause Now** to check after macOS updates. Browser playback has no fallback.
 
