@@ -7,9 +7,8 @@
 // coalescable once-a-minute timer for the menu-bar countdown.
 // Security model: no network, no user input reaches a shell, no special permissions.
 // The only file written is ~/Library/Logs/SleepTimer.log (pause failures only). The only
-// child process is /usr/bin/osascript with fixed scripts.
-// If the MediaRemote pause fails, it logs it, falls back to pausing TV/Music, and posts
-// a notification if nothing could be paused.
+// child process is /usr/bin/osascript with a fixed script.
+// If the pause fails, it logs why, flags it in the menu and posts a notification.
 
 import Cocoa
 import ServiceManagement
@@ -21,7 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     private var endDate: Date?
     private var endTimer: Timer?
     private var titleTimer: Timer?
-    private var lastPauseFailure: (date: Date, fallbackWorked: Bool)?
+    private var lastPauseFailure: Date?
     private static let logURL = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Logs/SleepTimer.log")
     private var askedForNotifications = false
@@ -40,20 +39,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     delay(1);
     """
 
-    /// Fallback: pause apps directly. `is running` never launches an app. Prints how many it paused.
-    private static let fallbackScript = """
-    set n to 0
-    if application "TV" is running then
-        tell application "TV" to pause
-        set n to n + 1
-    end if
-    if application "Music" is running then
-        tell application "Music" to pause
-        set n to n + 1
-    end if
-    return n
-    """
-
     func applicationDidFinishLaunching(_ notification: Notification) {
         updateStatusItem()
         let menu = NSMenu()
@@ -66,9 +51,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
     func menuNeedsUpdate(_ menu: NSMenu) {
         menu.removeAllItems()
         if let failed = lastPauseFailure {
-            let time = Self.timeFormatter.string(from: failed.date)
-            add(menu, failed.fallbackWorked ? "⚠️ Normal pause failed at \(time) (fallback used)"
-                                            : "⚠️ Pause failed at \(time)", #selector(openLog))
+            add(menu, "⚠️ Pause failed at \(Self.timeFormatter.string(from: failed))", #selector(openLog))
             menu.addItem(.separator())
         }
         if let end = endDate {
@@ -217,24 +200,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     // MARK: Pause
 
-    /// MediaRemote first. If osascript errors or hangs, pause TV/Music directly.
-    /// If that also finds nothing to stop, notify and flag it in the menu.
+    /// If osascript errors or hangs: log why, flag it in the menu (click opens the log), notify.
     /// Limit: a MediaRemote call that exits cleanly but pauses nothing can't be detected.
     private func pauseMedia() {
         runOsascript(["-l", "JavaScript", "-e", Self.pauseScript]) { [weak self] ok, _, err in
             guard let self else { return }
             if ok { self.lastPauseFailure = nil; return }
-            // Logged even if the fallback works: this is the signal that a macOS update broke MediaRemote.
-            self.logFailure("MediaRemote pause failed: \(err.isEmpty ? "no error output" : err)")
-            self.runOsascript(["-e", Self.fallbackScript]) { ok, out, err2 in
-                let paused = ok ? (Int(out) ?? 0) : 0
-                if !ok { self.logFailure("Fallback pause failed: \(err2.isEmpty ? "no error output" : err2)") }
-                let worked = paused > 0
-                self.logFailure(worked ? "Fallback paused \(paused) app(s) (TV/Music)"
-                                       : "Nothing was paused")
-                self.lastPauseFailure = (Date(), worked)
-                if !worked { self.notifyPauseFailed(detail: err.isEmpty ? err2 : err) }
-            }
+            self.logFailure("Pause failed: \(err.isEmpty ? "no error output" : err)")
+            self.lastPauseFailure = Date()
+            self.notifyPauseFailed(detail: err)
         }
     }
 
@@ -255,12 +229,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
 
     @objc private func openLog() { NSWorkspace.shared.open(Self.logURL) }   // opens in Console
 
-    /// Runs osascript with a fixed script; calls back on the main thread with (exited 0, stdout, stderr).
+    /// Runs osascript; calls back on the main thread with (exited 0, stdout, stderr).
     /// Killed after 10 s so a hang counts as a failure.
     private func runOsascript(_ args: [String], completion: @escaping (Bool, String, String) -> Void) {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")   // absolute path: no PATH lookup
-        p.arguments = args                                             // fixed scripts, no interpolation
+        p.arguments = args                                             // fixed script, no interpolation
         let out = Pipe(), err = Pipe()
         p.standardOutput = out
         p.standardError = err
@@ -270,7 +244,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSMenuDelegate {
                     .trimmingCharacters(in: .whitespacesAndNewlines)
             }
             let ok = p.terminationReason == .exit && p.terminationStatus == 0
-            let (o, e) = (read(out), read(err))
+            var (o, e) = (read(out), read(err))
+            if p.terminationReason == .uncaughtSignal && e.isEmpty { e = "osascript timed out after 10 s" }
             DispatchQueue.main.async { completion(ok, o, e) }
         }
         do {
